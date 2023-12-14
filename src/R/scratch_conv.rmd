@@ -1,1 +1,7 @@
+---
+title: "Simple Convolutional Neural Network From Scratch"
+author: "Chris Yogodzinski"
+---
 
+```{R}
+```
