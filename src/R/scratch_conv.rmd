@@ -25,7 +25,9 @@ $P$     matrix: pooled feature map, condensed image of dim = ($\frac{m - m_k}{s}
 The convolutional layer in a cnn is named after a method known as kernel convolution.   
 Kernel convolution works by passing a filter or kernal iteratively over the input matrix and transform the values of the input based on the values of the kernel.   
 In this notebook our kernal transformation will be $\sum_{i}\sum_{j}I[m - i, n - j] \times K$.  
-In words this is element-wise multiplication of the kernel-sized subset of $I$ and $K$ followed by the sum of the product.
+In words this is element-wise multiplication of the kernel-sized subset of $I$ and $K$ followed by the sum of the product.  
+Kernel Convolution simplifies our image which reduces the number of parameters our model needs to learn in the fully connected layers.   
+However the kernel itself is also a set of paramters that needs to be learned so that we're not losing important information when we simplify the images.  
 
 ## Importing the data
 The following code chunks read in the binary formatted mnist images
@@ -62,6 +64,7 @@ test_dat <- read_mnist(
   paste(dat_path, "t10k-images.idx3-ubyte", sep = "/")
 )
 ```
+## Image Preprocessing
 ### Flipping The Images
 The function above reads the images in upside down for some reason.   
 In the code chunk below I flip the images right side up and visualize them.
@@ -95,10 +98,10 @@ image(img, col = gray((0:255) / 255))
 ### Adding padding to images
 In this step I'm adding a border of empty pixels around the edge of the images.  
 The purpose of this step is to allow our model to get a better "view" of the features around the edges of the image.
-It is likely this is unnecessary for such simple images like the mnist dataset.  
+It is likely this is unnecessary for such simple images like the mnist dataset. In this step I am also scaling the pixel values to be between 0 and 1.
 ```{R add-padding-to-imgs}
 # add zero value to pixels to edges of all images
-add_padding <- function(img) {
+add_padding_and_scale <- function(img) {
   top_bottom <- rep_len(0, ncol(img))
   img <- rbind(top_bottom, img, top_bottom)
   left_right <- rep_len(0, nrow(img))
@@ -107,41 +110,76 @@ add_padding <- function(img) {
 }
 
 train_dat[["imgs"]] <- array(
-  apply(train_dat[["imgs"]], MARGIN = 3, add_boundary),
+  apply(train_dat[["imgs"]], MARGIN = 3, add_padding_and_scale),
   dim = c(30, 30, 60000)
 )
 
 test_dat[["imgs"]] <- array(
-  apply(test_dat[["imgs"]], MARGIN = 3, add_boundary),
+  apply(test_dat[["imgs"]], MARGIN = 3, add_padding_and_scale),
   dim = c(30, 30, 10000)
 )
 ```
 ## Forward Propagation
-```{R forward propagation}
-forward_propagation <- function()
+### Kernel Convlution
+In the cell below I've written some functions to apply kernel convolution to an array of our images. 
+You can see from the images printed at below the cell how some features of the digits have been filtered out after kernel convolution
+```{R fp-kernel-convolution}
 
-kernel_conv <- function(img, img_dim, kernel, kernel_dim, stride) {
-  # images are square so just need to make one index
-  conv_idx <- seq(1, img_dim[2] - kernel_dim[2], by = stride)
 
-   # using random kernel element values either 0 or 1
-  subs_img <- img[j:j+kernel_dim[1], i:i+kernel_dim[2]]
-  filted_subs <- sum(subs_img * kernel)
-
-  return(filted_img)
+kernel_filt <- function(row_idx, col_idx, img, kernel, kernel_dim) {
+  img_panel <- img[row_idx:(row_idx+kernel_dim[1] - 1), col_idx:(col_idx+kernel_dim[2] - 1)]
+  filted_panel <- sum(img_panel * kernel)
+  return(filted_panel)
 }
 
-stride <- 2
-kernel_dim <- c(3 , 3)
-kernel <- matrix(
+kernel_conv <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
+  # wrapper function to use in Map
+  apply_kernel_filter <- function(x) {
+    kernel_filt(
+      feat_map_idx[x, "Var1"],
+      feat_map_idx[x, "Var2"],
+      img,
+      kernel,
+      kernel_dim
+    )
+  }
+  feat_map_flat <- unlist(Map(apply_kernel_filter, rownames(feat_map_idx)))
+  feat_map <- matrix(feat_map_flat, nrow = dim_out, ncol = dim_out)
+  return(feat_map)
+}
 
-  data = rbinom(prod(kernel_dim), 1, 0.5),
+apply_kernel_conv <- function(imgs, kernel, kernel_dim, stride) {
+
+  data_dim <- dim(imgs)
+  # images are square so just need to make one index
+  conv_idx <- seq(1, img_dim[2] - kernel_dim[2] + 1, by = stride)
+  # generate two column matrix of all indeces needed for full convolution
+  feat_map_idx <- expand.grid(rep(list(conv_idx), 2))
+  dim_out <- ((img_dim[1] - kernel_dim[1]) / stride) + 1
+  feat_maps <- apply(
+    imgs,
+    MARGIN = 3,
+    function(x) kernel_conv(x, kernel, kernel_dim, feat_map_idx, dim_out)
+  )
+  feat_maps <- array(feat_maps, dim = c(dim_out, dim_out, data_dim[3]))
+  return(feat_maps)
+}
+
+
+stride <- 1
+kernel_dim <- c(6, 6)
+kernel <- matrix(
+  runif(prod(kernel_dim), -2, 2),
   nrow = kernel_dim[1],
   ncol = kernel_dim[2]
 )
 img_dim <- dim(train_dat[["imgs"]][, , 1])
+feature_maps <- apply_kernel_conv(train_dat[["imgs"]][, , 1:2], kernel, kernel_dim, stride)
 
-kernel_conv(img, img_dim, kernel, kernel_dim, stride)
+show_img <- 2
+image(train_dat[["imgs"]][, , show_img], col = gray((0:255) / 255))
+image(feature_maps[, , show_img], col = gray((0:255) / 255))
+#kernel_conv(img, img_dim, kernel, kernel_dim, stride)
 
 ```
 ## Backward Propagation
