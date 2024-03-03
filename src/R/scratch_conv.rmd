@@ -143,8 +143,16 @@ kernel_conv <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
       kernel_dim
     )
   }
-  feat_map_flat <- unlist(Map(apply_kernel_filter, rownames(feat_map_idx)))
-  feat_map <- matrix(feat_map_flat, nrow = dim_out, ncol = dim_out)
+  feat_map <- matrix( 
+    sapply(rownames(feat_map_idx), FUN = apply_kernel_filter),
+    nrow = dim_out,
+    ncol = dim_out
+  )
+  #feat_map <- matrix( 
+  #  unlist(Map(apply_kernel_filter, rownames(feat_map_idx))),
+  #  nrow = dim_out,
+  #  ncol = dim_out
+  #)
   return(feat_map)
 }
 
@@ -167,19 +175,23 @@ apply_kernel_conv <- function(imgs, kernel, kernel_dim, stride) {
 
 
 stride <- 1
-kernel_dim <- c(6, 6)
+kernel_dim <- c(10, 10)
 kernel <- matrix(
-  runif(prod(kernel_dim), -2, 2),
+  runif(prod(kernel_dim), -1, 1),
   nrow = kernel_dim[1],
   ncol = kernel_dim[2]
 )
 img_dim <- dim(train_dat[["imgs"]][, , 1])
+
+# 6 by 6 kernel will take roughly 40 min to run on all 60k images without parallel processing
+ti <- Sys.time()
 feature_maps <- apply_kernel_conv(train_dat[["imgs"]][, , 1:2], kernel, kernel_dim, stride)
+tf <- Sys.time()
+print(tf - ti)
 
 show_img <- 2
 image(train_dat[["imgs"]][, , show_img], col = gray((0:255) / 255))
 image(feature_maps[, , show_img], col = gray((0:255) / 255))
-#kernel_conv(img, img_dim, kernel, kernel_dim, stride)
 
 ```
 ## Backward Propagation
