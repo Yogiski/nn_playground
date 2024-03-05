@@ -68,132 +68,147 @@ test_dat <- read_mnist(
 ### Flipping The Images
 The function above reads the images in upside down for some reason.   
 In the code chunk below I flip the images right side up and visualize them.
-
-```{R flip-images}
-flip_all_imgs <- function(array) { 
-
-    flip_image <- function(img) {
-        flipped <- img[, ncol(img):1]
-        return(flipped)
-    }
-    dims <- dim(array)
-    flipped <- array(apply(array, 3, flip_image), dim = dims)
-    return(flipped)
-}
-
-train_dat[["imgs"]] <- flip_all_imgs(train_dat[["imgs"]])
-test_dat[["imgs"]] <- flip_all_imgs(test_dat[["imgs"]])
-
-im_num <- 5 
-# test image
-img <- test_dat[["imgs"]][ , , im_num]
-cat(test_dat[["labels"]][im_num])
-image(img, col = gray((0:255) / 255))
-
-# train image
-img <- train_dat[["imgs"]][ , , im_num]
-cat(train_dat[["labels"]][im_num])
-image(img, col = gray((0:255) / 255))
-```
 ### Adding padding to images
 In this step I'm adding a border of empty pixels around the edge of the images.  
 The purpose of this step is to allow our model to get a better "view" of the features around the edges of the image.
 It is likely this is unnecessary for such simple images like the mnist dataset. In this step I am also scaling the pixel values to be between 0 and 1.
-```{R add-padding-to-imgs}
-# add zero value to pixels to edges of all images
-add_padding_and_scale <- function(img) {
-  top_bottom <- rep_len(0, ncol(img))
-  img <- rbind(top_bottom, img, top_bottom)
-  left_right <- rep_len(0, nrow(img))
-  img <- unname(cbind(left_right, img, left_right))
-  return(img)
+
+```{R flip-images}
+preprocess_img <- function(img) { 
+
+  flip_img <- function(img) {
+    flipped <- img[, ncol(img):1]
+    return(flipped)
+  }
+  zero_pad_img <- function(img) {
+    top_bottom <- rep_len(0, ncol(img))
+    img <- rbind(top_bottom, img, top_bottom)
+    left_right <- rep_len(0, nrow(img))
+    img <- unname(cbind(left_right, img, left_right))
+    return(img)
+  }
+  preproccessed_img <- zero_pad_img(flip_img(img)) / 255
+
+  return(preproccessed_img)
 }
 
-train_dat[["imgs"]] <- array(
-  apply(train_dat[["imgs"]], MARGIN = 3, add_padding_and_scale),
-  dim = c(30, 30, 60000)
-)
+preprocess_all <- function(img_array) {
+  dims <- dim(img_array) + c(2, 2, 0)
+  preprocessed <- array(apply(img_array, 3, preprocess_img), dim = dims)
+  return(preprocessed)
+}
 
-test_dat[["imgs"]] <- array(
-  apply(test_dat[["imgs"]], MARGIN = 3, add_padding_and_scale),
-  dim = c(30, 30, 10000)
-)
+# apply preprocessing
+train_dat[["imgs"]] <- preprocess_all(train_dat[["imgs"]])
+test_dat[["imgs"]] <- preprocess_all(test_dat[["imgs"]])
+
+im_num <- 5 
+# test image
+img <- test_dat[["imgs"]][ , , im_num]
+cat(test_dat[["labels"]][im_num], sep = "\n")
+image(img, col = gray((0:255) / 255))
+
+# train image
+img <- train_dat[["imgs"]][ , , im_num]
+cat(train_dat[["labels"]][im_num], sep = "\n")
+image(img, col = gray((0:255) / 255))
 ```
+
 ## Forward Propagation
 ### Kernel Convlution
 In the cell below I've written some functions to apply kernel convolution to an array of our images. 
 You can see from the images printed at below the cell how some features of the digits have been filtered out after kernel convolution
 ```{R fp-kernel-convolution}
 
+kernel_conv_slow <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
 
-kernel_filt <- function(row_idx, col_idx, img, kernel, kernel_dim) {
-  img_panel <- img[row_idx:(row_idx+kernel_dim[1] - 1), col_idx:(col_idx+kernel_dim[2] - 1)]
-  filted_panel <- sum(img_panel * kernel)
-  return(filted_panel)
-}
-
-kernel_conv <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
-  # wrapper function to use in Map
-  apply_kernel_filter <- function(x) {
-    kernel_filt(
-      feat_map_idx[x, "Var1"],
-      feat_map_idx[x, "Var2"],
-      img,
-      kernel,
-      kernel_dim
-    )
+  # wrapper function to filter signal panel of image
+  kernel_filt <- function(x) {
+    row_idx <- feat_map_idx[x, "Var1"]
+    col_idx <- feat_map_idx[x, "Var2"]
+    img_panel <- img[row_idx:(row_idx+kernel_dim[1] - 1), col_idx:(col_idx+kernel_dim[2] - 1)]
+    filted_panel <- sum(img_panel * kernel)
+    return(filted_panel)
   }
+  # Apply complete convolution
   feat_map <- matrix( 
-    sapply(rownames(feat_map_idx), FUN = apply_kernel_filter),
+    sapply(rownames(feat_map_idx), FUN = kernel_filt),
     nrow = dim_out,
     ncol = dim_out
   )
-  #feat_map <- matrix( 
-  #  unlist(Map(apply_kernel_filter, rownames(feat_map_idx))),
-  #  nrow = dim_out,
-  #  ncol = dim_out
-  #)
   return(feat_map)
 }
 
-apply_kernel_conv <- function(imgs, kernel, kernel_dim, stride) {
-
-  data_dim <- dim(imgs)
-  # images are square so just need to make one index
-  conv_idx <- seq(1, img_dim[2] - kernel_dim[2] + 1, by = stride)
-  # generate two column matrix of all indeces needed for full convolution
-  feat_map_idx <- expand.grid(rep(list(conv_idx), 2))
-  dim_out <- ((img_dim[1] - kernel_dim[1]) / stride) + 1
-  feat_maps <- apply(
-    imgs,
-    MARGIN = 3,
-    function(x) kernel_conv(x, kernel, kernel_dim, feat_map_idx, dim_out)
-  )
-  feat_maps <- array(feat_maps, dim = c(dim_out, dim_out, data_dim[3]))
-  return(feat_maps)
+# pads kernel with zeros to be same dimensions as image, needed for fft convolution
+pad_kernel <- function(kern, img_dim) {
+  padding_len <- img_dim[1] - dim(kern)[1]
+  right <- matrix(0, nrow = dim(kern)[1], ncol = padding_len)
+  bottom <- matrix(0, nrow = padding_len, ncol = img_dim[2])
+  padded <- rbind(cbind(kern, right), bottom)
+  return(padded)
 }
 
+kernel_conv_fft <- function(img, img_dims, padded_ft, dim_out) {
+  convolved <- fft(fft(img) * padded_ft, inverse = TRUE)
+  return(convolved)
+}
 
+apply_kernel_conv <- function(imgs, kern, kernel_dim, stride, method = "fft") {
+
+  data_dim <- dim(imgs)
+  dim_out <- ((data_dim[1] - kernel_dim[1]) / stride) + 1
+  # make values of kernel sum to 1
+  kern_probs <- exp(kern) / sum(exp(kern)) 
+
+  if (method == "fft") {
+    # zero pad kernel to match size of images
+    padded <- pad_kernel(kern_probs, data_dim[1:2]) 
+    padded_ft <- fft(padded)
+    dim_out <- data_dim
+    conv_func <- function(x) {
+      kernel_conv_fft(x, data_dim[1:2], padded_ft, dim_out)
+    }
+  } else {
+    # generate two column matrix of all indeces needed for full convolution
+    conv_idx <- seq(1, data_dim[2] - kernel_dim[2] + 1, by = stride)
+    feat_map_idx <- expand.grid(rep(list(conv_idx), 2))
+    dim_out <- c(dim_out, dim_out, data_dim[3])
+    conv_func <- function(x) {
+      kernel_conv_slow(x, kern_probs, kernel_dim, feat_map_idx, dim_out) 
+    }
+  }
+  feat_maps <- apply(imgs, MARGIN = 3, conv_func)
+  feat_maps <- array(as.numeric(feat_maps), dim = dim_out)
+  return(feat_maps)
+
+}
+```
+Below I have benchmarked the two convolution implementations. 
+I also show the differences in the images after convolution.
+```{R applying-convolutions}
 stride <- 1
-kernel_dim <- c(10, 10)
-kernel <- matrix(
-  runif(prod(kernel_dim), -1, 1),
+kernel_dim <- c(8, 8)
+kern <- matrix(
+  rnorm(prod(kernel_dim), 0, 1.5),
   nrow = kernel_dim[1],
   ncol = kernel_dim[2]
 )
-img_dim <- dim(train_dat[["imgs"]][, , 1])
 
-# 6 by 6 kernel will take roughly 40 min to run on all 60k images without parallel processing
 ti <- Sys.time()
-feature_maps <- apply_kernel_conv(train_dat[["imgs"]][, , 1:2], kernel, kernel_dim, stride)
+feature_maps_slow <- apply_kernel_conv(train_dat[["imgs"]][, , 1:100], kern, kernel_dim, stride, method = "slow")
 tf <- Sys.time()
 print(tf - ti)
 
-show_img <- 2
-image(train_dat[["imgs"]][, , show_img], col = gray((0:255) / 255))
-image(feature_maps[, , show_img], col = gray((0:255) / 255))
+ti <- Sys.time()
+feature_maps_fft <- apply_kernel_conv(train_dat[["imgs"]][, , 1:100], kern, kernel_dim, stride, method = "fft")
+tf <- Sys.time()
+print(tf - ti)
 
+
+image(feature_maps_slow[, , im_num], col = gray((0:255) / 255))
+image(feature_maps_fft[, , im_num], col = gray((0:255) / 255))
 ```
-## Backward Propagation
+
+## Backward Propagation  
 ```{R backward-propagation}
 ```
