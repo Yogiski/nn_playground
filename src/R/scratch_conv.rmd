@@ -115,9 +115,14 @@ image(img, col = gray((0:255) / 255))
 ```
 
 ## Forward Propagation
+In the following cells i've written some functions needed for forward propagtion  
+
 ### Kernel Convlution
 In the cell below I've written some functions to apply kernel convolution to an array of our images. 
-You can see from the images printed at below the cell how some features of the digits have been filtered out after kernel convolution
+You can see from the images printed at below the cell how some features of the digits have been filtered out after kernel convolution.   
+Initially I implemented kernel convolution in the spatial domain. Using this procedure kernel convolution of the complete training dataset would take roughly 40 mins.  
+I could implement some parallel processing or train on a gpu to increase performance.  
+Instead I decided to implement kernel convolution in the spatial domain using fast fourier transform. This drastically improves performance.  
 ```{R fp-kernel-convolution}
 
 kernel_conv_slow <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
@@ -157,12 +162,10 @@ apply_kernel_conv <- function(imgs, kern, kernel_dim, stride, method = "fft") {
 
   data_dim <- dim(imgs)
   dim_out <- ((data_dim[1] - kernel_dim[1]) / stride) + 1
-  # make values of kernel sum to 1
-  kern_probs <- exp(kern) / sum(exp(kern)) 
 
   if (method == "fft") {
     # zero pad kernel to match size of images
-    padded <- pad_kernel(kern_probs, data_dim[1:2]) 
+    padded <- pad_kernel(kern[kernel_dim[1]:1, kernel_dim[2]:1], data_dim[1:2])
     padded_ft <- fft(padded)
     dim_out <- data_dim
     conv_func <- function(x) {
@@ -174,7 +177,7 @@ apply_kernel_conv <- function(imgs, kern, kernel_dim, stride, method = "fft") {
     feat_map_idx <- expand.grid(rep(list(conv_idx), 2))
     dim_out <- c(dim_out, dim_out, data_dim[3])
     conv_func <- function(x) {
-      kernel_conv_slow(x, kern_probs, kernel_dim, feat_map_idx, dim_out) 
+      kernel_conv_slow(x, kern, kernel_dim, feat_map_idx, dim_out) 
     }
   }
   feat_maps <- apply(imgs, MARGIN = 3, conv_func)
@@ -185,9 +188,10 @@ apply_kernel_conv <- function(imgs, kern, kernel_dim, stride, method = "fft") {
 ```
 Below I have benchmarked the two convolution implementations. 
 I also show the differences in the images after convolution.
-```{R applying-convolutions}
+```{R convolution-procedure-benchmark}
 stride <- 1
-kernel_dim <- c(8, 8)
+kernel_dim <- c(3, 3)
+set.seed(7734)
 kern <- matrix(
   rnorm(prod(kernel_dim), 0, 1.5),
   nrow = kernel_dim[1],
@@ -204,11 +208,19 @@ feature_maps_fft <- apply_kernel_conv(train_dat[["imgs"]][, , 1:100], kern, kern
 tf <- Sys.time()
 print(tf - ti)
 
-
-image(feature_maps_slow[, , im_num], col = gray((0:255) / 255))
-image(feature_maps_fft[, , im_num], col = gray((0:255) / 255))
+show <- 6
+image(train_dat[["imgs"]][, , show], col = gray((0:255) / 255))
+image(feature_maps_slow[, , show], col = gray((0:255) / 255))
+image(feature_maps_fft[, , show], col = gray((0:255) / 255))
 ```
 
-## Backward Propagation  
+### Pooling 
+
+Below I program some pooling procedures to implemnt a pooling layer within the convolutional neural network.
+```{R pooling}
+```
+
+## Backward Propagation 
+
 ```{R backward-propagation}
 ```
