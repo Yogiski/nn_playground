@@ -64,6 +64,20 @@ test_dat <- read_mnist(
   paste(dat_path, "t10k-images.idx3-ubyte", sep = "/")
 )
 ```
+```{R activation-functions}
+relu <- function(vec) {
+  ifelse(vec > 0, vec, 0)
+}
+
+relu_deriv <- function(vec) {
+  ifelse(vec > 0, 1, 0)
+}
+
+softmax <- function(vec) {
+  expo <- exp(vec - max(vec))
+  expo / sum(expo) 
+} 
+```
 ## Image Preprocessing
 ### Flipping The Images
 The function above reads the images in upside down for some reason.   
@@ -123,9 +137,9 @@ You can see from the images printed at below the cell how some features of the d
 Initially I implemented kernel convolution in the spatial domain. Using this procedure kernel convolution of the complete training dataset would take roughly 40 mins.  
 I could implement some parallel processing or train on a gpu to increase performance.  
 Instead I decided to implement kernel convolution in the spatial domain using fast fourier transform. This drastically improves performance.  
-```{R fp-kernel-convolution}
+```{R convolutional-layer}
 
-kernel_conv_slow <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
+kernel_conv_slow <- function(img, kernel, kernel_dim, feat_map_idx, dim_out, activation_func) {
 
   # wrapper function to filter signal panel of image
   kernel_filt <- function(x) {
@@ -141,7 +155,7 @@ kernel_conv_slow <- function(img, kernel, kernel_dim, feat_map_idx, dim_out) {
     nrow = dim_out,
     ncol = dim_out
   )
-  return(feat_map)
+  activation_func(feat_map)
 }
 
 # pads kernel with zeros to be same dimensions as image, needed for fft convolution
@@ -153,35 +167,39 @@ pad_kernel <- function(kern, img_dim) {
   return(padded)
 }
 
-kernel_conv_fft <- function(img, img_dims, padded_ft, dim_out) {
+kernel_conv_fft <- function(img, img_dims, padded_ft, dim_out, activation_func) {
   convolved <- fft(fft(img) * padded_ft, inverse = TRUE)
-  return(convolved)
+  convolved_trunc <- as.numeric(
+    convolved[dim_out[1]:img_dims[1], dim_out[2]:img_dims[2]]
+  )
+  activation_func(convolved_trunc)
 }
 
-apply_kernel_conv <- function(imgs, kern, kernel_dim, stride, method = "fft") {
-
+apply_kernel_conv <- function(
+  imgs, kern, kernel_dim, stride, method = "fft", activation_func = relu
+) {
   data_dim <- dim(imgs)
   dim_out <- ((data_dim[1] - kernel_dim[1]) / stride) + 1
 
   if (method == "fft") {
+    # calc truncation of image to match slow method
+    trunc_dims <- c(data_dim[1] - dim_out + 1, data_dim[2] - dim_out + 1)
     # zero pad kernel to match size of images
     padded <- pad_kernel(kern[kernel_dim[1]:1, kernel_dim[2]:1], data_dim[1:2])
     padded_ft <- fft(padded)
-    dim_out <- data_dim
     conv_func <- function(x) {
-      kernel_conv_fft(x, data_dim[1:2], padded_ft, dim_out)
+      kernel_conv_fft(x, data_dim[1:2], padded_ft, trunc_dims, activation_func)
     }
   } else {
     # generate two column matrix of all indeces needed for full convolution
     conv_idx <- seq(1, data_dim[2] - kernel_dim[2] + 1, by = stride)
     feat_map_idx <- expand.grid(rep(list(conv_idx), 2))
-    dim_out <- c(dim_out, dim_out, data_dim[3])
     conv_func <- function(x) {
-      kernel_conv_slow(x, kern, kernel_dim, feat_map_idx, dim_out) 
+      kernel_conv_slow(x, kern, kernel_dim, feat_map_idx, dim_out, activation_func) 
     }
   }
   feat_maps <- apply(imgs, MARGIN = 3, conv_func)
-  feat_maps <- array(as.numeric(feat_maps), dim = dim_out)
+  feat_maps <- array(feat_maps, dim = c(dim_out, dim_out, data_dim[3]))
   return(feat_maps)
 
 }
@@ -190,7 +208,7 @@ Below I have benchmarked the two convolution implementations.
 I also show the differences in the images after convolution.
 ```{R convolution-procedure-benchmark}
 stride <- 1
-kernel_dim <- c(3, 3)
+kernel_dim <- c(5, 5)
 set.seed(7734)
 kern <- matrix(
   rnorm(prod(kernel_dim), 0, 1.5),
@@ -199,16 +217,29 @@ kern <- matrix(
 )
 
 ti <- Sys.time()
-feature_maps_slow <- apply_kernel_conv(train_dat[["imgs"]][, , 1:100], kern, kernel_dim, stride, method = "slow")
+feature_maps_slow <- apply_kernel_conv(
+  train_dat[["imgs"]][, , 1:100],
+  kern,
+  kernel_dim,
+  stride,
+  method = "slow",
+  activation_func = relu
+)
 tf <- Sys.time()
 print(tf - ti)
 
 ti <- Sys.time()
-feature_maps_fft <- apply_kernel_conv(train_dat[["imgs"]][, , 1:100], kern, kernel_dim, stride, method = "fft")
+feature_maps_fft <- apply_kernel_conv(
+  train_dat[["imgs"]][, , 1:100],
+  kern,
+  kernel_dim,
+  stride,
+  method = "fft",
+  activation_func = relu
+)
 tf <- Sys.time()
 print(tf - ti)
-
-show <- 6
+show <- 30
 image(train_dat[["imgs"]][, , show], col = gray((0:255) / 255))
 image(feature_maps_slow[, , show], col = gray((0:255) / 255))
 image(feature_maps_fft[, , show], col = gray((0:255) / 255))
@@ -217,9 +248,65 @@ image(feature_maps_fft[, , show], col = gray((0:255) / 255))
 ### Pooling 
 
 Below I program some pooling procedures to implemnt a pooling layer within the convolutional neural network.
-```{R pooling}
-```
+I will re-use the code for slow convolution for the pooling operation.
+```{R pooling-layer}
 
+pooling_procedure <- function(img, filter_dim, feat_map_idx, dim_out, pooling_func = max) {
+
+  # wrapper function to filter signal panel of image
+  pool_filt <- function(x) {
+    row_idx <- feat_map_idx[x, "Var1"]
+    col_idx <- feat_map_idx[x, "Var2"]
+    img_panel <- img[row_idx:(row_idx+filter_dim[1] - 1), col_idx:(col_idx+filter_dim[2] - 1)]
+    filted_panel <- pooling_func(img_panel)
+    return(filted_panel)
+  }
+  # Apply complete convolution
+  pooled_map <- matrix( 
+    sapply(rownames(feat_map_idx), FUN = pool_filt),
+    nrow = dim_out,
+    ncol = dim_out
+  )
+  return(pooled_map)
+}
+
+pooling_layer <- function(imgs, filter_dim, stride, pooling_func = max) {
+
+
+  data_dim <- dim(imgs)
+  dim_out <- ((data_dim[1] - filter_dim[1]) / stride) + 1
+  pool_idx <- seq(1, data_dim[2] - filter_dim[2] + 1, by = stride)
+  pool_map_idx <- expand.grid(rep(list(pool_idx), 2))
+
+  pool_func <- function(x) {
+    pooling_procedure(x, filter_dim, pool_map_idx, dim_out, pooling_func = pooling_func)
+  }
+
+  dim_out <- c(dim_out, dim_out, data_dim[3])
+  pooled <- apply(imgs, MARGIN = 3, pool_func)
+  pooled <- array(as.numeric(pooled), dim = dim_out)
+
+  return(pooled)
+}
+pool_stride = 2
+ti <- Sys.time()
+pooled_fft <- apply_pooling(feature_maps_fft, c(2, 2), pool_stride, pooling_func = max)
+tf <- Sys.time()
+print(tf - ti)
+
+image(pooled_fft[, , 30], col = gray((0:255) / 255))
+```
+```{R fully-connected-layer}
+
+dense_layer <- function(feature_maps, weights, biases, activation_func) {
+  node_vals <- weights %*% feature_maps + biases
+  output <- activation_func(lin_transform)
+} 
+
+```
+```{R forward-propagation}
+
+```
 ## Backward Propagation 
 
 ```{R backward-propagation}
